@@ -2,33 +2,33 @@ package types
 
 import "sync"
 
-// Message represents the message structure to be routed through the server.
+// Message represents a message to be routed through exchanges and queues.
 type Message struct {
 	Body       string // The actual message content
-	RoutingKey string // Key used to route the message to the right queue
+	RoutingKey string // The routing key used for routing the message
 }
 
-// Queue holds messages and supports basic queue operations.
+// Queue represents a message queue where messages are stored.
 type Queue struct {
 	Name     string
 	Messages chan Message // Channel to hold messages in the queue
 }
 
-// ExchangeType defines the types of exchanges (similar to RabbitMQ).
-type ExchangeType int
+// ExchangeType defines types of exchanges (e.g., Direct, Topic, Fanout).
+type ExchangeType string
 
 const (
-	Direct ExchangeType = iota
-	Topic
-	Fanout
+	Direct ExchangeType = "direct"
+	Topic  ExchangeType = "topic"
+	Fanout ExchangeType = "fanout"
 )
 
-// Exchange routes messages to queues based on exchange type and routing key.
+// Exchange routes messages to queues based on type and routing key.
 type Exchange struct {
 	Name        string
 	Type        ExchangeType
 	Bindings    map[string][]*Queue // Maps routing keys to queues
-	BindingsMux sync.Mutex          // Mutex to safely update bindings
+	BindingsMux sync.RWMutex        // RWMutex for safe concurrent access
 }
 
 func (q *Queue) Consume() <-chan Message {
