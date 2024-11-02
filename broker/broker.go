@@ -137,7 +137,7 @@ func (b *Broker) sendMessage(queue *types.Queue, message types.Message) {
 }
 
 // matchesTopic checks if a routing key matches a topic pattern.
-func matchesTopic(routingKey, pattern string) bool {
-	// Basic implementation: can be expanded with wildcards if needed
-	return routingKey == pattern
-}
+//func matchesTopic(routingKey, pattern string) bool {
+//	// Basic implementation: can be expanded with wildcards if needed
+//	return routingKey == pattern
+//}

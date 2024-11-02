@@ -10,8 +10,9 @@ type Message struct {
 
 // Queue represents a message queue where messages are stored.
 type Queue struct {
-	Name     string
-	Messages chan Message // Channel to hold messages in the queue
+	Name       string
+	Messages   chan Message // Channel to hold messages in the queue
+	ConsumeMux sync.Mutex   // Mutex to control access for consumers
 }
 
 // ExchangeType defines types of exchanges (e.g., Direct, Topic, Fanout).
