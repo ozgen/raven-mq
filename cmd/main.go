@@ -2,15 +2,14 @@ package main
 
 import (
 	"fmt"
+	"github.com/ozgen/raven-mq/broker"
 	"log"
 	"net"
-
-	"github.com/ozgen/raven-mq/service"
 )
 
 func main() {
 	// Initialize the AMQP service, which acts as the broker.
-	amqpService := service.NewAMQPService()
+	amqpBroker := broker.NewAMQPBroker()
 
 	// Start a TCP listener on port 2122 for AMQP client connections.
 	listener, err := net.Listen("tcp", ":2122")
@@ -30,6 +29,6 @@ func main() {
 		}
 
 		// Handle each connection in a separate goroutine
-		go amqpService.HandleConnection(conn)
+		go amqpBroker.HandleConnection(conn)
 	}
 }

@@ -1,33 +1,29 @@
-package service
+package broker
 
 import (
 	"bufio"
 	"fmt"
+	"github.com/ozgen/raven-mq/types"
 	"log"
 	"net"
 	"strings"
 	"sync"
-
-	"github.com/ozgen/raven-mq/types"
 )
 
-// AMQPService acts as the central broker, managing exchanges, queues, and message routing.
-type AMQPService struct {
+type RavenMQAmqpBroker struct {
 	queues    map[string]*types.Queue    // Collection of queues
 	exchanges map[string]*types.Exchange // Collection of exchanges
 	mux       sync.RWMutex               // Mutex for safe access to queues and exchanges
 }
 
-// NewAMQPService initializes the AMQPService with empty exchanges and queues.
-func NewAMQPService() *AMQPService {
-	return &AMQPService{
+func NewAMQPBroker() *RavenMQAmqpBroker {
+	return &RavenMQAmqpBroker{
 		queues:    make(map[string]*types.Queue),
 		exchanges: make(map[string]*types.Exchange),
 	}
 }
 
-// HandleConnection listens for commands on a TCP connection and manages exchanges, queues, bindings, and messages.
-func (s *AMQPService) HandleConnection(conn net.Conn) {
+func (s *RavenMQAmqpBroker) HandleConnection(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 
@@ -102,7 +98,7 @@ func (s *AMQPService) HandleConnection(conn net.Conn) {
 				continue
 			}
 			queueName := parts[1]
-			go s.consumeQueue(conn, queueName) // Start consuming in a separate goroutine
+			go s.consumeQueue(conn, queueName)
 			fmt.Fprintln(conn, "Consumer started")
 
 		default:
@@ -111,13 +107,13 @@ func (s *AMQPService) HandleConnection(conn net.Conn) {
 	}
 }
 
-// declareQueue creates a new queue within the service.
-func (s *AMQPService) declareQueue(name string) error {
+func (s *RavenMQAmqpBroker) declareQueue(name string) error {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 
 	if _, exists := s.queues[name]; exists {
-		return fmt.Errorf("queue %s already exists", name)
+		log.Printf("Queue %s already exists", name)
+		return nil
 	}
 
 	queue := &types.Queue{
@@ -125,16 +121,17 @@ func (s *AMQPService) declareQueue(name string) error {
 		Messages: make(chan types.Message, 100),
 	}
 	s.queues[name] = queue
+	log.Printf("Queue '%s' declared successfully.", name)
 	return nil
 }
 
-// declareExchange creates a new exchange of a given type within the service.
-func (s *AMQPService) declareExchange(name, exType string) error {
+func (s *RavenMQAmqpBroker) declareExchange(name, exType string) error {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 
 	if _, exists := s.exchanges[name]; exists {
-		return fmt.Errorf("exchange %s already exists", name)
+		log.Printf("Exchange %s already exists", name)
+		return nil
 	}
 
 	var exchangeType types.ExchangeType
@@ -154,37 +151,45 @@ func (s *AMQPService) declareExchange(name, exType string) error {
 		Type:     exchangeType,
 		Bindings: make(map[string][]*types.Queue),
 	}
+	log.Printf("Exchange '%s' of type '%s' declared successfully.", name, exType)
 	return nil
 }
 
-// bindQueue binds a queue to an exchange with a specific routing key.
-func (s *AMQPService) bindQueue(queueName, exchangeName, routingKey string) error {
+func (s *RavenMQAmqpBroker) bindQueue(queueName, exchangeName, routingKey string) error {
 	s.mux.RLock()
 	exchange, exExists := s.exchanges[exchangeName]
 	queue, qExists := s.queues[queueName]
 	s.mux.RUnlock()
 
 	if !exExists {
-		return fmt.Errorf("exchange %s does not exist", exchangeName)
+		return fmt.Errorf("Exchange %s does not exist", exchangeName)
 	}
 	if !qExists {
-		return fmt.Errorf("queue %s does not exist", queueName)
+		return fmt.Errorf("Queue %s does not exist", queueName)
 	}
 
 	exchange.BindingsMux.Lock()
 	defer exchange.BindingsMux.Unlock()
 
+	// Check if the binding already exists to avoid redundant bindings
+	for _, boundQueue := range exchange.Bindings[routingKey] {
+		if boundQueue == queue {
+			log.Printf("Queue '%s' is already bound to exchange '%s' with routing key '%s'", queueName, exchangeName, routingKey)
+			return nil
+		}
+	}
+
 	exchange.Bindings[routingKey] = append(exchange.Bindings[routingKey], queue)
+	log.Printf("Queue '%s' bound to exchange '%s' with routing key '%s'", queueName, exchangeName, routingKey)
 	return nil
 }
 
-// publishMessage publishes a message to an exchange and routes it to bound queues.
-func (s *AMQPService) publishMessage(exchangeName, routingKey string, message types.Message) error {
+func (s *RavenMQAmqpBroker) publishMessage(exchangeName, routingKey string, message types.Message) error {
 	s.mux.RLock()
 	exchange, exists := s.exchanges[exchangeName]
 	s.mux.RUnlock()
 	if !exists {
-		return fmt.Errorf("exchange %s does not exist", exchangeName)
+		return fmt.Errorf("Exchange %s does not exist", exchangeName)
 	}
 
 	exchange.BindingsMux.RLock()
@@ -194,31 +199,39 @@ func (s *AMQPService) publishMessage(exchangeName, routingKey string, message ty
 	case types.Fanout:
 		for _, queues := range exchange.Bindings {
 			for _, queue := range queues {
-				s.sendMessage(queue, message)
+				s.sendMessageToQueue(queue, message)
 			}
 		}
 	case types.Direct:
 		if queues, ok := exchange.Bindings[routingKey]; ok {
 			for _, queue := range queues {
-				s.sendMessage(queue, message)
+				s.sendMessageToQueue(queue, message)
 			}
 		}
 	case types.Topic:
 		for key, queues := range exchange.Bindings {
 			if matchesTopic(routingKey, key) {
 				for _, queue := range queues {
-					s.sendMessage(queue, message)
+					s.sendMessageToQueue(queue, message)
 				}
 			}
 		}
 	default:
-		return fmt.Errorf("unsupported exchange type: %v", exchange.Type)
+		return fmt.Errorf("Unsupported exchange type: %v", exchange.Type)
 	}
 	return nil
 }
 
-// consumeQueue reads messages from the specified queue and sends them to the connection.
-func (s *AMQPService) consumeQueue(conn net.Conn, queueName string) {
+func (s *RavenMQAmqpBroker) sendMessageToQueue(queue *types.Queue, message types.Message) {
+	select {
+	case queue.Messages <- message:
+		log.Printf("Message '%s' sent to queue '%s'", message.Body, queue.Name)
+	default:
+		log.Printf("Queue %s is full. Message dropped.", queue.Name)
+	}
+}
+
+func (s *RavenMQAmqpBroker) consumeQueue(conn net.Conn, queueName string) {
 	s.mux.RLock()
 	queue, exists := s.queues[queueName]
 	s.mux.RUnlock()
@@ -227,21 +240,20 @@ func (s *AMQPService) consumeQueue(conn net.Conn, queueName string) {
 		return
 	}
 
+	fmt.Fprintf(conn, "Consumer started\n")
+	queue.ConsumeMux.Lock()
+	defer queue.ConsumeMux.Unlock()
+
 	for msg := range queue.Messages {
-		fmt.Fprintf(conn, "Consumed message: %s\n", msg.Body)
+		log.Printf("Dispatching message to consumer: %s", msg.Body)
+		_, err := fmt.Fprintf(conn, "Consumed message: %s\n", msg.Body)
+		if err != nil {
+			log.Println("Error sending message to consumer:", err)
+			return
+		}
 	}
 }
 
-// sendMessage safely sends a message to a queue.
-func (s *AMQPService) sendMessage(queue *types.Queue, message types.Message) {
-	select {
-	case queue.Messages <- message:
-	default:
-		fmt.Printf("Queue %s is full. Message dropped.\n", queue.Name)
-	}
-}
-
-// matchesTopic checks if a routing key matches a topic pattern.
 func matchesTopic(routingKey, pattern string) bool {
 	return routingKey == pattern
 }
