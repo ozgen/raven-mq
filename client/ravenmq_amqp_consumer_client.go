@@ -62,24 +62,48 @@ func (c *RavenMQAmqpConsumerClient) Close() error {
 
 // DefineQueueAndExchange sets up an exchange, queue, and binding on the broker only if they haven't been defined for this session.
 func (c *RavenMQAmqpConsumerClient) DefineQueueAndExchange(exchange, exchangeType, queue, routingKey string) error {
+	// Validate inputs
+	if exchange == "" || exchangeType == "" || queue == "" || routingKey == "" {
+		return fmt.Errorf("invalid parameters: exchange='%s', exchangeType='%s', queue='%s', routingKey='%s'", exchange, exchangeType, queue, routingKey)
+	}
+
 	commands := []string{
 		fmt.Sprintf("DECLARE_EXCHANGE %s %s", exchange, exchangeType),
 		fmt.Sprintf("DECLARE_QUEUE %s", queue),
 		fmt.Sprintf("BIND_QUEUE %s %s %s", queue, exchange, routingKey),
 	}
+
 	for _, cmd := range commands {
 		log.Printf("Sending command to broker: %s", cmd)
+
+		// Validate command parameters
+		if strings.Contains(cmd, "BIND_QUEUE") && (queue == "" || exchange == "" || routingKey == "") {
+			return fmt.Errorf("invalid BIND_QUEUE parameters: queue='%s', exchange='%s', routingKey='%s'", queue, exchange, routingKey)
+		}
+
+		// Send the command
 		if err := c.sendCommand(cmd); err != nil {
 			log.Printf("Error sending command '%s': %v", cmd, err)
+
+			// Handle "already exists" error gracefully
+			if strings.Contains(err.Error(), "already exists") {
+				log.Printf("Command '%s' already executed, skipping.", cmd)
+				continue
+			}
+
+			// Attempt reconnection on transient errors
 			if reconnectErr := c.reconnect(); reconnectErr != nil {
 				return fmt.Errorf("reconnect failed during setup: %w", reconnectErr)
 			}
+
 			// Retry the command after reconnecting
+			log.Printf("Retrying command '%s' after reconnecting...", cmd)
 			if err := c.sendCommand(cmd); err != nil {
 				return fmt.Errorf("command failed after reconnect: %w", err)
 			}
 		}
 	}
+
 	log.Println("Exchange, queue, and binding setup complete.")
 	return nil
 }
