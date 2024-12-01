@@ -10,15 +10,15 @@ import (
 	"github.com/ozgen/raven-mq/client"
 )
 
-// TestConsumerService manages the consumer's state and operations.
-type TestConsumerService struct {
+// Test2ConsumerService manages the consumer's state and operations.
+type Test2ConsumerService struct {
 	client          *client.RavenMQAmqpConsumerClient
 	consumerStarted bool
 	mu              sync.Mutex
 }
 
-// NewTestConsumerService initializes and returns a new TestConsumerService.
-func NewTestConsumerService(brokerAddr string) (*TestConsumerService, error) {
+// NewTest2ConsumerService initializes and returns a new TestConsumerService.
+func NewTest2ConsumerService(brokerAddr string) (*Test2ConsumerService, error) {
 	// Define a custom reconnection policy
 	reconnectPolicy := client.NewReconnectionPolicy(10, 1*time.Second, 10*time.Second)
 
@@ -28,13 +28,13 @@ func NewTestConsumerService(brokerAddr string) (*TestConsumerService, error) {
 		return nil, fmt.Errorf("failed to initialize RavenMQAmqpConsumerClient: %w", err)
 	}
 
-	return &TestConsumerService{
+	return &Test2ConsumerService{
 		client: amqpClient,
 	}, nil
 }
 
 // Start initializes the queue and exchange, then begins consuming messages if not already running.
-func (s *TestConsumerService) Start() error {
+func (s *Test2ConsumerService) Start2() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -43,7 +43,7 @@ func (s *TestConsumerService) Start() error {
 	}
 
 	// Define the necessary exchange and queue on RavenMQ every time Start is called
-	err := s.client.DefineQueueAndExchange("example_exchange", "fanout", "example_queue1", "example_key")
+	err := s.client.DefineQueueAndExchange("example_exchange", "fanout", "example_queue2", "example_key")
 	if err != nil {
 		log.Printf("Failed to define exchange and queue: %v", err)
 		return err
@@ -52,7 +52,7 @@ func (s *TestConsumerService) Start() error {
 
 	// Start consuming messages in a goroutine
 	go func() {
-		err := s.client.Consume("example_exchange", "fanout", "example_queue1", "example_key", func(message string) {
+		err := s.client.Consume("example_exchange", "fanout", "example_queue2", "example_key", func(message string) {
 			fmt.Println("Consumed message:", message)
 		})
 		if err != nil {
@@ -66,7 +66,7 @@ func (s *TestConsumerService) Start() error {
 
 func main() {
 	// Initialize the consumer service with the RavenMQ server address
-	consumerService, err := NewTestConsumerService("localhost:2122")
+	consumerService, err := NewTest2ConsumerService("localhost:2122")
 	if err != nil {
 		log.Fatalf("Failed to initialize ConsumerService: %v", err)
 	}
@@ -74,7 +74,7 @@ func main() {
 
 	// Define the /start handler
 	http.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
-		err := consumerService.Start()
+		err := consumerService.Start2()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -84,6 +84,6 @@ func main() {
 	})
 
 	// Start the consumer server on port 8081
-	log.Println("Consumer server running on port 8081...")
-	log.Fatal(http.ListenAndServe(":8081", nil))
+	log.Println("Consumer server running on port 8082...")
+	log.Fatal(http.ListenAndServe(":8082", nil))
 }

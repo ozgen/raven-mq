@@ -55,34 +55,53 @@ func (p *RavenMQAmqpProducerClient) Close() error {
 	return nil
 }
 
-// DefineQueueAndExchange creates or binds an exchange, queue, and routing key on the broker.
+// DefineQueueAndExchange sets up an exchange, queue, and binding dynamically based on the exchange type.
 func (p *RavenMQAmqpProducerClient) DefineQueueAndExchange(exchange, exchangeType, queue, routingKey string) error {
-	commands := []string{
-		fmt.Sprintf("DECLARE_EXCHANGE %s %s", exchange, exchangeType),
-		fmt.Sprintf("DECLARE_QUEUE %s", queue),
-		fmt.Sprintf("BIND_QUEUE %s %s %s", queue, exchange, routingKey),
-	}
-	for _, cmd := range commands {
-		log.Printf("Sending command to broker: %s", cmd)
-		if err := p.sendCommand(cmd); err != nil {
-			log.Printf("Error sending command '%s': %v", cmd, err)
-			if reconnectErr := p.reconnect(); reconnectErr != nil {
-				return fmt.Errorf("reconnect failed: %w", reconnectErr)
-			}
-			if err := p.sendCommand(cmd); err != nil {
-				return fmt.Errorf("command failed after reconnect: %w", err)
-			}
+	// Declare the exchange
+	command := fmt.Sprintf("DECLARE_EXCHANGE %s %s", exchange, exchangeType)
+	log.Printf("Sending command to broker: %s", command)
+	if err := p.sendCommand(command); err != nil {
+		log.Printf("Error declaring exchange '%s': %v", exchange, err)
+		if reconnectErr := p.reconnect(); reconnectErr != nil {
+			return fmt.Errorf("reconnect failed: %w", reconnectErr)
+		}
+		if err := p.sendCommand(command); err != nil {
+			return fmt.Errorf("exchange declaration failed after reconnect: %w", err)
 		}
 	}
-	log.Println("Exchange, queue, and binding setup complete.")
+	log.Printf("Exchange '%s' of type '%s' declared successfully.", exchange, exchangeType)
+
+	// Only define queue and binding for direct or topic exchanges
+	if exchangeType != "fanout" {
+		commands := []string{
+			fmt.Sprintf("DECLARE_QUEUE %s", queue),
+			fmt.Sprintf("BIND_QUEUE %s %s %s", queue, exchange, routingKey),
+		}
+		for _, cmd := range commands {
+			log.Printf("Sending command to broker: %s", cmd)
+			if err := p.sendCommand(cmd); err != nil {
+				log.Printf("Error sending command '%s': %v", cmd, err)
+				if reconnectErr := p.reconnect(); reconnectErr != nil {
+					return fmt.Errorf("reconnect failed: %w", reconnectErr)
+				}
+				if err := p.sendCommand(cmd); err != nil {
+					return fmt.Errorf("command failed after reconnect: %w", err)
+				}
+			}
+		}
+		log.Printf("Queue '%s' and binding to exchange '%s' with routing key '%s' completed.", queue, exchange, routingKey)
+	} else {
+		log.Printf("Skipping queue and binding setup for fanout exchange '%s'.", exchange)
+	}
+
 	return nil
 }
 
-// reconnect safely closes the existing connection, re-establishes a new one.
+// reconnect safely closes the existing connection and re-establishes a new one.
 func (p *RavenMQAmqpProducerClient) reconnect() error {
 	if p.conn != nil {
 		log.Println("Closing existing connection before attempting to reconnect...")
-		_ = p.conn.Close() // safely close existing connection
+		_ = p.conn.Close()
 	}
 	log.Println("Attempting to reconnect to broker at", p.brokerAddr)
 	conn, err := p.reconnectPolicy.ExecuteWithReconnect(func() (net.Conn, error) {

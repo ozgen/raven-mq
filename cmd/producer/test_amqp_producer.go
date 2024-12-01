@@ -49,7 +49,7 @@ func (p *ProducerService) Close() error {
 func (p *ProducerService) PublishMessage(w http.ResponseWriter, r *http.Request) {
 	counter++
 	message := "Hello from Producer! counter: " + strconv.Itoa(counter)
-	err := p.client.DefineQueueAndExchange("example_exchange", "direct", "example_queue", "example_key")
+	err := p.client.DefineQueueAndExchange("example_exchange", "fanout", "", "")
 
 	// Publish the message
 	err = p.client.Publish("example_exchange", "example_key", message)
@@ -65,7 +65,7 @@ func (p *ProducerService) PublishMessage(w http.ResponseWriter, r *http.Request)
 
 func main() {
 	// Initialize the ProducerService with the broker's TCP address
-	producerService, err := NewProducerService("localhost:2122", "example_exchange", "direct", "example_queue", "example_key")
+	producerService, err := NewProducerService("localhost:2122", "example_exchange", "fanout", "", "example_key")
 	if err != nil {
 		log.Fatalf("Failed to initialize ProducerService: %v", err)
 	}
