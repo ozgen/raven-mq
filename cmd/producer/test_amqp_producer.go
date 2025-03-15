@@ -2,28 +2,27 @@ package main
 
 import (
 	"fmt"
+	client2 "github.com/ozgen/raven-mq/internal/client"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/ozgen/raven-mq/client"
 )
 
 var counter int = 0
 
 // ProducerService manages the producer's operations, including publishing messages.
 type ProducerService struct {
-	client *client.RavenMQAmqpProducerClient
+	client *client2.RavenMQAmqpProducerClient
 }
 
 // NewProducerService initializes and returns a new ProducerService with reconnection capabilities.
 func NewProducerService(brokerAddr, exchange, exchangeType, queue, routingKey string) (*ProducerService, error) {
 	// Define a custom reconnection policy for the producer
-	reconnectPolicy := client.NewReconnectionPolicy(10, 1*time.Second, 10*time.Second)
+	reconnectPolicy := client2.NewReconnectionPolicy(10, 1*time.Second, 10*time.Second)
 
 	// Initialize the RavenMQAmqpProducerClient with the broker's TCP address and custom policy
-	amqpClient, err := client.NewAmqpProducerClientWithPolicy(brokerAddr, reconnectPolicy)
+	amqpClient, err := client2.NewAmqpProducerClientWithPolicy(brokerAddr, reconnectPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize RavenMQAmqpProducerClient: %w", err)
 	}

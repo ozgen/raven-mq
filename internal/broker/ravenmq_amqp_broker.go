@@ -3,8 +3,9 @@ package broker
 import (
 	"bufio"
 	"fmt"
-	"github.com/ozgen/raven-mq/types"
-	"log"
+	"github.com/ozgen/raven-mq/internal/log"
+	"github.com/ozgen/raven-mq/internal/providers/db"
+	"github.com/ozgen/raven-mq/internal/types"
 	"net"
 	"strings"
 	"sync"
@@ -14,12 +15,38 @@ type RavenMQAmqpBroker struct {
 	queues    map[string]*types.Queue    // Collection of queues
 	exchanges map[string]*types.Exchange // Collection of exchanges
 	mux       sync.RWMutex               // Mutex for safe access to queues and exchanges
+	store     *db.Storage                // sqlite for storing queues, exchanges and messages
 }
 
 func NewAMQPBroker() *RavenMQAmqpBroker {
-	return &RavenMQAmqpBroker{
+	store, err := db.NewStorage("ravenmq.db")
+	if err != nil {
+		log.LogCritical("Failed to initialize SQLite: %v", err)
+	}
+	broker := &RavenMQAmqpBroker{
 		queues:    make(map[string]*types.Queue),
 		exchanges: make(map[string]*types.Exchange),
+		store:     store,
+	}
+
+	// Load exchanges and queues from SQLite
+	broker.restoreState()
+	return broker
+}
+
+// Restore exchanges and queues from SQLite on startup.
+func (s *RavenMQAmqpBroker) restoreState() {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+
+	exchanges, _ := s.store.LoadExchanges()
+	for name, exType := range exchanges {
+		s.exchanges[name] = &types.Exchange{Name: name, Type: types.ExchangeType(exType), Bindings: make(map[string][]*types.Queue)}
+	}
+
+	queues, _ := s.store.LoadQueues()
+	for _, name := range queues {
+		s.queues[name] = &types.Queue{Name: name, Messages: make(chan types.Message, 100)}
 	}
 }
 
@@ -30,7 +57,7 @@ func (s *RavenMQAmqpBroker) HandleConnection(conn net.Conn) {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			log.Println("Client disconnected or error reading:", err)
+			log.LogError("Client disconnected or error reading: %v", err)
 			return
 		}
 
@@ -112,7 +139,7 @@ func (s *RavenMQAmqpBroker) declareQueue(name string) error {
 	defer s.mux.Unlock()
 
 	if _, exists := s.queues[name]; exists {
-		log.Printf("Queue %s already exists", name)
+		log.LogDebug("Queue %s already exists", name)
 		return nil
 	}
 
@@ -120,8 +147,9 @@ func (s *RavenMQAmqpBroker) declareQueue(name string) error {
 		Name:     name,
 		Messages: make(chan types.Message, 100),
 	}
+	s.store.SaveQueue(name)
 	s.queues[name] = queue
-	log.Printf("Queue '%s' declared successfully.", name)
+	log.LogInfo("Queue '%s' declared successfully.", name)
 	return nil
 }
 
@@ -130,7 +158,7 @@ func (s *RavenMQAmqpBroker) declareExchange(name, exType string) error {
 	defer s.mux.Unlock()
 
 	if _, exists := s.exchanges[name]; exists {
-		log.Printf("Exchange %s already exists", name)
+		log.LogDebug("Exchange %s already exists", name)
 		return nil
 	}
 
@@ -146,12 +174,16 @@ func (s *RavenMQAmqpBroker) declareExchange(name, exType string) error {
 		return fmt.Errorf("unsupported exchange type: %s", exType)
 	}
 
+	err := s.store.SaveExchange(name, exType)
+	if err != nil {
+		log.LogError("Failed to store exchange %s: %v", name, err)
+	}
 	s.exchanges[name] = &types.Exchange{
 		Name:     name,
 		Type:     exchangeType,
 		Bindings: make(map[string][]*types.Queue),
 	}
-	log.Printf("Exchange '%s' of type '%s' declared successfully.", name, exType)
+	log.LogInfo("Exchange '%s' of type '%s' declared successfully.", name, exType)
 	return nil
 }
 
@@ -174,13 +206,13 @@ func (s *RavenMQAmqpBroker) bindQueue(queueName, exchangeName, routingKey string
 	// Check if the binding already exists to avoid redundant bindings
 	for _, boundQueue := range exchange.Bindings[routingKey] {
 		if boundQueue == queue {
-			log.Printf("Queue '%s' is already bound to exchange '%s' with routing key '%s'", queueName, exchangeName, routingKey)
+			log.LogDebug("Queue '%s' is already bound to exchange '%s' with routing key '%s'", queueName, exchangeName, routingKey)
 			return nil
 		}
 	}
 
 	exchange.Bindings[routingKey] = append(exchange.Bindings[routingKey], queue)
-	log.Printf("Queue '%s' bound to exchange '%s' with routing key '%s'", queueName, exchangeName, routingKey)
+	log.LogInfo("Queue '%s' bound to exchange '%s' with routing key '%s'", queueName, exchangeName, routingKey)
 	return nil
 }
 
@@ -199,19 +231,34 @@ func (s *RavenMQAmqpBroker) publishMessage(exchangeName, routingKey string, mess
 	case types.Fanout:
 		for _, queues := range exchange.Bindings {
 			for _, queue := range queues {
+				// Store messages per queue (instead of the exchange)
+				err := s.store.SaveMessage(queue.Name, message.Body, routingKey)
+				if err != nil {
+					log.LogError("Failed to store message %s for queue %s: %v", message.Body, queue.Name, err)
+				}
 				s.sendMessageToQueue(queue, message)
 			}
 		}
 	case types.Direct:
 		if queues, ok := exchange.Bindings[routingKey]; ok {
 			for _, queue := range queues {
+				// Store messages per queue (instead of the exchange)
+				err := s.store.SaveMessage(queue.Name, message.Body, routingKey)
+				if err != nil {
+					log.LogError("Failed to store message %s for queue %s: %v", message.Body, queue.Name, err)
+				}
 				s.sendMessageToQueue(queue, message)
 			}
 		}
 	case types.Topic:
 		for key, queues := range exchange.Bindings {
-			if matchesTopic(routingKey, key) {
+			if matchesTopic2(routingKey, key) {
 				for _, queue := range queues {
+					// Store messages per queue (instead of the exchange)
+					err := s.store.SaveMessage(queue.Name, message.Body, routingKey)
+					if err != nil {
+						log.LogError("Failed to store message %s for queue %s: %v", message.Body, queue.Name, err)
+					}
 					s.sendMessageToQueue(queue, message)
 				}
 			}
@@ -225,9 +272,9 @@ func (s *RavenMQAmqpBroker) publishMessage(exchangeName, routingKey string, mess
 func (s *RavenMQAmqpBroker) sendMessageToQueue(queue *types.Queue, message types.Message) {
 	select {
 	case queue.Messages <- message:
-		log.Printf("Message '%s' sent to queue '%s'", message.Body, queue.Name)
+		log.LogDebug("Message '%s' sent to queue '%s'", message.Body, queue.Name)
 	default:
-		log.Printf("Queue %s is full. Message dropped.", queue.Name)
+		log.LogDebug("Queue %s is full. Message dropped.", queue.Name)
 	}
 }
 
@@ -235,6 +282,7 @@ func (s *RavenMQAmqpBroker) consumeQueue(conn net.Conn, queueName string) {
 	s.mux.RLock()
 	queue, exists := s.queues[queueName]
 	s.mux.RUnlock()
+
 	if !exists {
 		fmt.Fprintf(conn, "Queue %s does not exist\n", queueName)
 		return
@@ -245,15 +293,19 @@ func (s *RavenMQAmqpBroker) consumeQueue(conn net.Conn, queueName string) {
 	defer queue.ConsumeMux.Unlock()
 
 	for msg := range queue.Messages {
-		log.Printf("Dispatching message to consumer: %s", msg.Body)
-		_, err := fmt.Fprintf(conn, "Consumed message: %s\n", msg.Body)
+		log.LogDebug("Dispatching message to consumer: %s", msg.Body)
+		err := s.store.DeleteMessage(queue.Name, msg.Body)
 		if err != nil {
-			log.Println("Error sending message to consumer:", err)
+			log.LogError("Failed to delete message %s for queue %s: %v", msg.Body, queue.Name, err)
+		}
+		_, err = fmt.Fprintf(conn, "Consumed message: %s\n", msg.Body)
+		if err != nil {
+			log.LogDebug("Error sending message to consumer: %v", err)
 			return
 		}
 	}
 }
 
-func matchesTopic(routingKey, pattern string) bool {
+func matchesTopic2(routingKey, pattern string) bool {
 	return routingKey == pattern
 }
