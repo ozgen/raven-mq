@@ -2,9 +2,8 @@ package broker
 
 import (
 	"fmt"
+	"github.com/ozgen/raven-mq/internal/types"
 	"sync"
-
-	"github.com/ozgen/raven-mq/types"
 )
 
 // Broker manages exchanges, queues, and routing of messages.
@@ -114,7 +113,7 @@ func (b *Broker) PublishMessage(exchangeName, routingKey string, message types.M
 	case types.Topic:
 		// Topic exchange: Match routing key patterns (simple matching logic here)
 		for key, queues := range exchange.Bindings {
-			if matchesTopic(routingKey, key) {
+			if matchesTopic3(routingKey, key) {
 				for _, queue := range queues {
 					b.sendMessage(queue, message)
 				}
@@ -137,7 +136,7 @@ func (b *Broker) sendMessage(queue *types.Queue, message types.Message) {
 }
 
 // matchesTopic checks if a routing key matches a topic pattern.
-//func matchesTopic(routingKey, pattern string) bool {
-//	// Basic implementation: can be expanded with wildcards if needed
-//	return routingKey == pattern
-//}
+func matchesTopic3(routingKey, pattern string) bool {
+	// Basic implementation: can be expanded with wildcards if needed
+	return routingKey == pattern
+}

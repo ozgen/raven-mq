@@ -54,7 +54,7 @@ package main
 
 import (
     "log"
-    "github.com/ozgen/raven-mq/client"
+    "github.com/ozgen/raven-mq/internal/client"
 )
 
 func main() {
@@ -84,7 +84,7 @@ package main
 
 import (
     "log"
-    "github.com/ozgen/raven-mq/client"
+    "github.com/ozgen/raven-mq/internal/client"
 )
 
 func main() {
@@ -131,20 +131,20 @@ func main() {
 
 The following list includes areas to enhance Raven-MQ's functionality, performance, and reliability. Feel free to check off completed items as they are implemented.
 
-- [ ] **Unit Tests**
+- [x] **Unit Tests**
     - Implement unit tests for broker functions (e.g., exchange, queue, and message handling).
     - Add tests for producer and consumer client interactions.
     - Ensure coverage for edge cases, including reconnection and error handling.
 
-- [ ] **Persistence and Database Storage**
-    - Integrate optional database storage (e.g., PostgreSQL, Redis) for durable queue and message persistence.
+- [x] **Persistence and Database Storage**
+    - Integrate optional database storage (e.g., SQlite, Redis) for durable queue and message persistence.
     - Implement failover recovery to restore state from persistent storage on restart.
 
 - [ ] **Message Acknowledgment and Redelivery**
     - Add message acknowledgment from the consumer.
     - Implement redelivery mechanism for messages that are not acknowledged.
 
-- [ ] **Logging and Monitoring**
+- [x] **Logging and Monitoring**
     - Enhance logging with customizable verbosity levels (e.g., debug, info, warn, error).
     - Integrate monitoring for metrics such as message count, queue depth, and consumer lag.
 
@@ -152,7 +152,7 @@ The following list includes areas to enhance Raven-MQ's functionality, performan
     - Set up load tests to benchmark broker performance under high message volume.
     - Identify and address bottlenecks to improve scalability.
 
-- [ ] **Error Handling and Retry Policies**
+- [x] **Error Handling and Retry Policies**
     - Improve error handling within broker and clients, especially for network issues.
     - Implement retry policies for publishing and consuming messages to handle transient errors gracefully.
 

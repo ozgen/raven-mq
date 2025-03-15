@@ -2,17 +2,16 @@ package main
 
 import (
 	"fmt"
+	client2 "github.com/ozgen/raven-mq/internal/client"
 	"log"
 	"net/http"
 	"sync"
 	"time"
-
-	"github.com/ozgen/raven-mq/client"
 )
 
 // TestConsumerService manages the consumer's state and operations.
 type TestConsumerService struct {
-	client          *client.RavenMQAmqpConsumerClient
+	client          *client2.RavenMQAmqpConsumerClient
 	consumerStarted bool
 	mu              sync.Mutex
 }
@@ -20,10 +19,10 @@ type TestConsumerService struct {
 // NewTestConsumerService initializes and returns a new TestConsumerService.
 func NewTestConsumerService(brokerAddr string) (*TestConsumerService, error) {
 	// Define a custom reconnection policy
-	reconnectPolicy := client.NewReconnectionPolicy(10, 1*time.Second, 10*time.Second)
+	reconnectPolicy := client2.NewReconnectionPolicy(10, 1*time.Second, 10*time.Second)
 
 	// Initialize the RavenMQAmqpConsumerClient with the broker's TCP address and custom policy
-	amqpClient, err := client.NewAmqpConsumerClientWithPolicy(brokerAddr, reconnectPolicy)
+	amqpClient, err := client2.NewAmqpConsumerClientWithPolicy(brokerAddr, reconnectPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize RavenMQAmqpConsumerClient: %w", err)
 	}
@@ -52,8 +51,10 @@ func (s *TestConsumerService) Start() error {
 
 	// Start consuming messages in a goroutine
 	go func() {
-		err := s.client.Consume("example_exchange", "fanout", "example_queue1", "example_key", func(message string) {
+		err := s.client.Consume("example_exchange", "fanout", "example_queue1", "example_key", func(message string) error {
 			fmt.Println("Consumed message:", message)
+
+			return nil
 		})
 		if err != nil {
 			log.Printf("Failed to consume messages: %v", err)

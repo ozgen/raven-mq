@@ -3,8 +3,8 @@ package service
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/ozgen/raven-mq/broker"
-	"github.com/ozgen/raven-mq/types"
+	"github.com/ozgen/raven-mq/internal/http/broker"
+	"github.com/ozgen/raven-mq/internal/types"
 	"net/http"
 )
 
