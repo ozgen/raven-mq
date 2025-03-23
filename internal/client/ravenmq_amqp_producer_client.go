@@ -3,6 +3,7 @@ package client
 import (
 	"bufio"
 	"fmt"
+	"github.com/ozgen/raven-mq/internal/common"
 	"github.com/ozgen/raven-mq/internal/log"
 	"net"
 	"strings"
@@ -143,7 +144,7 @@ func (p *RavenMQAmqpProducerClient) sendCommand(command string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
-	if !strings.Contains(response, "successfully") && !strings.Contains(response, "Message published") {
+	if !strings.Contains(response, common.SuccessKeyword) && !strings.Contains(response, common.MessagePublished) {
 		return fmt.Errorf("broker error: %s", strings.TrimSpace(response))
 	}
 

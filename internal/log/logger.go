@@ -3,8 +3,10 @@ package log
 import (
 	"fmt"
 	"github.com/ozgen/raven-mq/internal/config"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -14,8 +16,18 @@ const (
 	WARN     = "WARN"
 	ERROR    = "ERROR"
 	CRITICAL = "CRITICAL"
-	LOG_FILE = "logs/raven-mq.log"
+	LOG_FILE = "raven-mq.log"
 )
+
+var logLevelPriority = map[string]int{
+	DEBUG:    1,
+	INFO:     2,
+	WARN:     3,
+	ERROR:    4,
+	CRITICAL: 5,
+}
+
+var configuredLogLevel = config.Envs.LogLevel
 
 var logger *log.Logger
 
@@ -31,17 +43,28 @@ func init() {
 	}
 
 	// Open log file
-	file, err := os.OpenFile(LOG_FILE, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logPath := filepath.Join(logDir, LOG_FILE)
+	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Fatalf("Could not open log file: %v", err)
 	}
 
-	// Initialize logger
-	logger = log.New(file, "", log.LstdFlags|log.Lmicroseconds)
+	if _, ok := logLevelPriority[configuredLogLevel]; !ok {
+		configuredLogLevel = INFO
+	}
+
+	// Initialize logger with std out and log file
+	multiWriter := io.MultiWriter(file, os.Stdout)
+	logger = log.New(multiWriter, "", log.LstdFlags|log.Lmicroseconds)
 }
 
 // logMessage now supports formatted messages
 func logMessage(level, format string, args ...interface{}) {
+
+	if logLevelPriority[level] < logLevelPriority[configuredLogLevel] {
+		return
+	}
+
 	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
 	message := fmt.Sprintf(format, args...)
 	logEntry := fmt.Sprintf("[%s] [%s] %s", timestamp, level, message)

@@ -35,7 +35,8 @@ func NewStorage(dbPath string) (*Storage, error) {
 		queue_name TEXT NOT NULL,
 		message TEXT NOT NULL,
 		routing_key TEXT NOT NULL,
-		status TEXT NOT NULL 
+		status TEXT NOT NULL, 
+		retry_count INTEGER DEFAULT 0 
 	);
 	`
 	_, err = db.Exec(createTablesSQL)
@@ -168,13 +169,13 @@ func (s *Storage) DeleteMessage(queue, message string) error {
 	return tx.Commit() // Commit transaction
 }
 
-func (s *Storage) MarkMessageUnacknowledged(queue, message string) error {
-	_, err := s.db.Exec("UPDATE messages SET status = 'pending' WHERE queue_name = ? AND message = ?", queue, message)
-	if err != nil {
-		return fmt.Errorf("failed to mark message as unacknowledged: %w", err)
-	}
-	log.LogInfo("Marked message '%s' as unacknowledged in queue '%s'", message, queue)
-	return nil
+func (s *Storage) MarkMessageDispatched(queueName, message string) error {
+	_, err := s.db.Exec(`
+		UPDATE messages
+		SET retry_count = retry_count + 1
+		WHERE queue_name = ? AND message = ?
+	`, queueName, message)
+	return err
 }
 
 // UnacknowledgedMessage represents a message that was not acknowledged
@@ -184,11 +185,19 @@ type UnacknowledgedMessage struct {
 	RoutingKey string
 }
 
-// LoadUnacknowledgedMessages fetches all messages with status 'pending' for redelivery
-func (s *Storage) LoadUnacknowledgedMessages() ([]UnacknowledgedMessage, error) {
-	rows, err := s.db.Query("SELECT queue_name, message, routing_key FROM messages WHERE status = 'pending'")
+// LoadMessagesForRetry loads 'pending' messages whose delivery_time is older than the given cutoff
+// and have not exceeded the retry limit.
+func (s *Storage) LoadMessagesForRetry(maxRetry int) ([]UnacknowledgedMessage, error) {
+	query := `
+		SELECT queue_name, message, routing_key
+		FROM messages
+		WHERE status = 'pending'
+		  AND retry_count < ?
+	`
+
+	rows, err := s.db.Query(query, maxRetry)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load unacknowledged messages: %w", err)
+		return nil, fmt.Errorf("failed to load messages for retry: %w", err)
 	}
 	defer rows.Close()
 
@@ -196,13 +205,13 @@ func (s *Storage) LoadUnacknowledgedMessages() ([]UnacknowledgedMessage, error) 
 	for rows.Next() {
 		var msg UnacknowledgedMessage
 		if err := rows.Scan(&msg.QueueName, &msg.Body, &msg.RoutingKey); err != nil {
-			return nil, fmt.Errorf("failed to scan unacknowledged message: %w", err)
+			return nil, fmt.Errorf("failed to scan retry message: %w", err)
 		}
 		messages = append(messages, msg)
 	}
 
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating unacknowledged messages: %w", err)
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating retry messages: %w", err)
 	}
 
 	return messages, nil

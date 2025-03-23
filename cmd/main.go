@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/ozgen/raven-mq/internal/broker"
 	"github.com/ozgen/raven-mq/internal/log"
 	"net"
@@ -17,6 +18,8 @@ func main() {
 	}
 	defer listener.Close()
 
+	printBanner()
+
 	log.LogInfo("Raven-MQ server running on port 2122...")
 
 	// Accept and handle incoming client connections.
@@ -30,4 +33,19 @@ func main() {
 		// Handle each connection in a separate goroutine
 		go amqpBroker.HandleConnection(conn)
 	}
+}
+
+func printBanner() {
+	banner := `
+           .--.
+         .'_\/_'.
+        /o     o\    RAVEN-MQ
+       |    .    |
+        \__/^\__/
+        //     \\
+       (|       |)
+        \\_   _//
+          "---"
+`
+	fmt.Println(banner)
 }
