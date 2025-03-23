@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/ozgen/raven-mq/internal/common"
 	"github.com/ozgen/raven-mq/internal/log"
 	"net"
 	"strings"
@@ -164,17 +165,22 @@ func (c *RavenMQAmqpConsumerClient) Consume(exchange, exchangeType, queue, routi
 			if messageHash != lastMessageHash {
 				lastMessageHash = messageHash
 				log.LogInfo("Single instance consumed message: %s\n", message)
-				if err := handleMessage(message); err != nil {
-					log.LogWarn("Consumer callback returned an error, stopping consumption: %v", err)
-					//todo ack logic is needed
+				if err := handleMessage(message); err == nil {
+					ackCmd := fmt.Sprintf("ACK %s %s", queue, message)
+					ackErr := c.sendCommand(ackCmd)
+					if ackErr != nil {
+						log.LogWarn("Failed to send ACK for message %s: %v", message, ackErr)
+					} else {
+						log.LogInfo("ACK confirmed for message: %s", message)
+					}
 				}
 			} else {
 				log.LogInfo("Duplicate message detected, ignoring: %s\n", message)
 			}
-		} else if line == "Consumer stopped" {
+		} else if line == common.MsgConsumerStopped {
 			log.LogInfo("Consumer explicitly stopped by broker.")
 			break
-		} else if strings.Contains(line, "Queue does not exist") {
+		} else if strings.Contains(line, common.QueueNotFoundPrefix) {
 			log.LogInfo("Queue '%s' not found after reconnect. Attempting to redefine...", queue)
 			if redefineErr := c.reconnectWithRedefine(exchange, exchangeType, queue, routingKey); redefineErr != nil {
 				return fmt.Errorf("redefinition failed after reconnect: %w", redefineErr)
@@ -227,7 +233,7 @@ func (c *RavenMQAmqpConsumerClient) sendCommand(command string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
-	if !strings.Contains(response, "successfully") && !strings.Contains(response, "Consumer started") {
+	if !strings.Contains(response, common.SuccessKeyword) && !strings.Contains(response, common.MsgConsumerStarted) {
 		return fmt.Errorf("broker error: %s", strings.TrimSpace(response))
 	}
 

@@ -3,12 +3,15 @@ package broker
 import (
 	"bufio"
 	"fmt"
+	"github.com/ozgen/raven-mq/internal/common"
+	"github.com/ozgen/raven-mq/internal/config"
 	"github.com/ozgen/raven-mq/internal/log"
 	"github.com/ozgen/raven-mq/internal/providers/db"
 	"github.com/ozgen/raven-mq/internal/types"
 	"net"
 	"strings"
 	"sync"
+	"time"
 )
 
 type RavenMQAmqpBroker struct {
@@ -16,10 +19,12 @@ type RavenMQAmqpBroker struct {
 	exchanges map[string]*types.Exchange // Collection of exchanges
 	mux       sync.RWMutex               // Mutex for safe access to queues and exchanges
 	store     *db.Storage                // sqlite for storing queues, exchanges and messages
+	conf      config.Config
 }
 
 func NewAMQPBroker() *RavenMQAmqpBroker {
-	store, err := db.NewStorage("ravenmq.db")
+	conf := config.Envs
+	store, err := db.NewStorage(conf.DBFile)
 	if err != nil {
 		log.LogCritical("Failed to initialize SQLite: %v", err)
 	}
@@ -27,10 +32,14 @@ func NewAMQPBroker() *RavenMQAmqpBroker {
 		queues:    make(map[string]*types.Queue),
 		exchanges: make(map[string]*types.Exchange),
 		store:     store,
+		conf:      conf,
 	}
 
 	// Load exchanges and queues from SQLite
 	broker.restoreState()
+
+	// initialize retry
+	broker.StartRetryLoop()
 	return broker
 }
 
@@ -66,7 +75,7 @@ func (s *RavenMQAmqpBroker) HandleConnection(conn net.Conn) {
 		command := parts[0]
 
 		switch command {
-		case "DECLARE_QUEUE":
+		case common.CmdDeclareQueue:
 			if len(parts) < 2 {
 				fmt.Fprintln(conn, "Usage: DECLARE_QUEUE <queue_name>")
 				continue
@@ -76,10 +85,10 @@ func (s *RavenMQAmqpBroker) HandleConnection(conn net.Conn) {
 			if err != nil {
 				fmt.Fprintf(conn, "Error: %v\n", err)
 			} else {
-				fmt.Fprintln(conn, "Queue declared successfully")
+				fmt.Fprintln(conn, common.MsgQueueDeclared)
 			}
 
-		case "DECLARE_EXCHANGE":
+		case common.CmdDeclareExchange:
 			if len(parts) < 3 {
 				fmt.Fprintln(conn, "Usage: DECLARE_EXCHANGE <exchange_name> <type>")
 				continue
@@ -89,10 +98,10 @@ func (s *RavenMQAmqpBroker) HandleConnection(conn net.Conn) {
 			if err != nil {
 				fmt.Fprintf(conn, "Error: %v\n", err)
 			} else {
-				fmt.Fprintln(conn, "Exchange declared successfully")
+				fmt.Fprintln(conn, common.MsgExchangeDeclared)
 			}
 
-		case "BIND_QUEUE":
+		case common.CmdBindQueue:
 			if len(parts) < 4 {
 				fmt.Fprintln(conn, "Usage: BIND_QUEUE <queue_name> <exchange_name> <routing_key>")
 				continue
@@ -102,10 +111,10 @@ func (s *RavenMQAmqpBroker) HandleConnection(conn net.Conn) {
 			if err != nil {
 				fmt.Fprintf(conn, "Error: %v\n", err)
 			} else {
-				fmt.Fprintln(conn, "Queue bound to exchange successfully")
+				fmt.Fprintln(conn, common.MsgQueueBound)
 			}
 
-		case "PUBLISH":
+		case common.CmdPublish:
 			if len(parts) < 4 {
 				fmt.Fprintln(conn, "Usage: PUBLISH <exchange_name> <routing_key> <message>")
 				continue
@@ -116,17 +125,30 @@ func (s *RavenMQAmqpBroker) HandleConnection(conn net.Conn) {
 			if err != nil {
 				fmt.Fprintf(conn, "Error: %v\n", err)
 			} else {
-				fmt.Fprintln(conn, "Message published successfully")
+				fmt.Fprintln(conn, common.MsgPublished)
 			}
 
-		case "CONSUME":
+		case common.CmdConsume:
 			if len(parts) < 2 {
 				fmt.Fprintln(conn, "Usage: CONSUME <queue_name>")
 				continue
 			}
 			queueName := parts[1]
 			go s.consumeQueue(conn, queueName)
-			fmt.Fprintln(conn, "Consumer started")
+			fmt.Fprintln(conn, common.ConsumerStarted)
+
+		case common.CmdAck:
+			if len(parts) < 3 {
+				fmt.Fprintln(conn, "Usage: ACK <queue_name> <message>")
+				continue
+			}
+			queueName, message := parts[1], strings.Join(parts[2:], " ")
+			err := s.acknowledgeMessage(queueName, message)
+			if err != nil {
+				fmt.Fprintf(conn, "Error: %v\n", err)
+			} else {
+				fmt.Fprintln(conn, common.MsgAck)
+			}
 
 		default:
 			fmt.Fprintln(conn, "Unknown command")
@@ -252,7 +274,7 @@ func (s *RavenMQAmqpBroker) publishMessage(exchangeName, routingKey string, mess
 		}
 	case types.Topic:
 		for key, queues := range exchange.Bindings {
-			if matchesTopic2(routingKey, key) {
+			if matchesTopics(routingKey, key) {
 				for _, queue := range queues {
 					// Store messages per queue (instead of the exchange)
 					err := s.store.SaveMessage(queue.Name, message.Body, routingKey)
@@ -294,11 +316,8 @@ func (s *RavenMQAmqpBroker) consumeQueue(conn net.Conn, queueName string) {
 
 	for msg := range queue.Messages {
 		log.LogDebug("Dispatching message to consumer: %s", msg.Body)
-		err := s.store.DeleteMessage(queue.Name, msg.Body)
-		if err != nil {
-			log.LogError("Failed to delete message %s for queue %s: %v", msg.Body, queue.Name, err)
-		}
-		_, err = fmt.Fprintf(conn, "Consumed message: %s\n", msg.Body)
+
+		_, err := fmt.Fprintf(conn, "%s%s\n", common.ConsumedMessagePrefix, msg.Body)
 		if err != nil {
 			log.LogDebug("Error sending message to consumer: %v", err)
 			return
@@ -306,6 +325,59 @@ func (s *RavenMQAmqpBroker) consumeQueue(conn net.Conn, queueName string) {
 	}
 }
 
-func matchesTopic2(routingKey, pattern string) bool {
+func (s *RavenMQAmqpBroker) acknowledgeMessage(queueName, message string) error {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+
+	// Check if the queue exists
+	_, exists := s.queues[queueName]
+	if !exists {
+		return fmt.Errorf("Queue %s does not exist", queueName)
+	}
+
+	// Delete the message from the database
+	err := s.store.DeleteMessage(queueName, message)
+	if err != nil {
+		return fmt.Errorf("Failed to acknowledge message: %w", err)
+	}
+
+	return nil
+}
+
+func matchesTopics(routingKey, pattern string) bool {
 	return routingKey == pattern
+}
+
+func (s *RavenMQAmqpBroker) StartRetryLoop() {
+	retryInterval := time.Duration(s.conf.RetryIntervalInSeconds) * time.Second
+	ticker := time.NewTicker(retryInterval)
+
+	go func() {
+		for range ticker.C {
+			messages, err := s.store.LoadMessagesForRetry(s.conf.MaxRetryMessageCount)
+			if err != nil {
+				log.LogError("Error loading messages for retry: %v", err)
+				continue
+			}
+
+			for _, msg := range messages {
+				s.mux.RLock()
+				queue, exists := s.queues[msg.QueueName]
+				s.mux.RUnlock()
+
+				if !exists {
+					log.LogWarn("Queue %s not found for retry", msg.QueueName)
+					continue
+				}
+
+				select {
+				case queue.Messages <- types.Message{Body: msg.Body, RoutingKey: msg.RoutingKey}:
+					log.LogInfo("Retrying message for queue %s: %s", msg.QueueName, msg.Body)
+					_ = s.store.MarkMessageDispatched(msg.QueueName, msg.Body)
+				default:
+					log.LogWarn("Queue %s is full, retry skipped for: %s", msg.QueueName, msg.Body)
+				}
+			}
+		}
+	}()
 }
